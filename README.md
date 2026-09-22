@@ -7,7 +7,7 @@ This repository contains a real MVP:
 - Next.js + TypeScript + Tailwind frontend with Arabic RTL and English UI
 - installable PWA shell, service worker, offline fallback, light/dark themes
 - FastAPI backend with a provider interface and a `yt-dlp` implementation
-- bounded background job queue, real progress updates, cancellation, expiring files
+- bounded background job queue, monotonic progress updates, cancellation, retry, expiring files
 - FFmpeg audio extraction and video/audio merging without shell interpolation
 - supported-host allowlist, DNS/IP checks, per-client job ownership, rate limits
 - Docker images, Compose setup, backend tests, and API documentation
@@ -20,6 +20,19 @@ The frontend is deployed to GitHub Pages at:
 
 GitHub Pages cannot run Python, FFmpeg, background workers, or `yt-dlp`. To enable analysis and downloads on the public URL, deploy `backend/` to a container host, then add a GitHub repository variable named `NEXT_PUBLIC_API_URL` containing its public HTTPS origin (for example, `https://api.example.com`). Also set the backend `LOOD_CORS_ORIGINS` to `https://mohamed-elrady.github.io`, then re-run the **Deploy web to GitHub Pages** workflow.
 
+The repository includes a ready-to-use Render Blueprint for the API:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Mohamed-ELRady/lood)
+
+After Render finishes, copy the generated `https://...onrender.com` URL and run:
+
+```bash
+gh variable set NEXT_PUBLIC_API_URL --body "https://YOUR-SERVICE.onrender.com"
+gh workflow run pages.yml
+```
+
+The Blueprint already allows the GitHub Pages origin through CORS. The free service is suitable for testing and may sleep or lose in-progress/finished files when its instance restarts; use a paid instance and durable queue/object storage before treating LOOD as a production public service.
+
 ## Important limits
 
 LOOD supports only public media that the user owns or has permission to save. It does not bypass DRM, private-content restrictions, logins, paywalls, or platform access controls. Platform extractors can change upstream; keep `yt-dlp` current and comply with each platform's terms and applicable law.
@@ -28,7 +41,7 @@ The included queue is process-local and intentionally simple for a single-instan
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22+ (frontend tooling and the JavaScript runtime used by current `yt-dlp` extractors)
 - Python 3.11+
 - FFmpeg available on `PATH`
 - internet access for source analysis/downloads
@@ -72,6 +85,7 @@ Copy `.env.example` to `.env` only when overriding defaults. Do not commit secre
 3. `GET /api/downloads/{job_id}` returns its real state and measurable progress.
 4. `GET /api/downloads/{job_id}/file?token=...` streams the completed file.
 5. `DELETE /api/downloads/{job_id}` requests cancellation.
+6. `POST /api/downloads/{job_id}/retry` creates a new attempt for a failed or cancelled job.
 
 The frontend generates a random client ID. The API hashes it and binds every job to it; knowing a job UUID alone is not sufficient. The completed file also requires its random token. Use authenticated accounts and persistent ownership records if deploying as a shared public service.
 
@@ -82,7 +96,7 @@ cd backend && pytest
 cd frontend && npm run build
 ```
 
-Backend tests use mocks for DNS and validation and do not download third-party media. Live extractor tests are intentionally excluded because they are unstable and may violate CI/network policy.
+Backend tests use mocks for DNS, provider output, job lifecycle, configuration, and validation. Live extractor tests are intentionally excluded from CI because upstream sources are unstable. The release was also exercised locally end-to-end against openly licensed media, including FFmpeg validation of the resulting MP3 and merged MP4 streams.
 
 ## Configuration
 

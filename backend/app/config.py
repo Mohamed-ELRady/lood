@@ -1,14 +1,17 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="LOOD_", extra="ignore")
 
-    cors_origins: list[str] = Field(default=["http://localhost:3000", "http://127.0.0.1:3000"])
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default=["http://localhost:3000", "http://127.0.0.1:3000"]
+    )
     job_ttl_seconds: int = Field(default=3600, ge=300, le=86400)
     max_active_jobs: int = Field(default=2, ge=1, le=10)
     max_file_size_mb: int = Field(default=1024, ge=10, le=10240)

@@ -1,5 +1,6 @@
 import asyncio
 import re
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,7 @@ class YtDlpProvider(MediaProvider):
     def supports(self, platform: Platform) -> bool:
         return platform in Platform
 
-    @staticmethod
-    def _base_options() -> dict[str, Any]:
+    def _base_options(self) -> dict[str, Any]:
         return {
             "quiet": True,
             "no_warnings": True,
@@ -34,8 +34,16 @@ class YtDlpProvider(MediaProvider):
             "fragment_retries": 2,
             "nocheckcertificate": False,
             "restrictfilenames": True,
-            "extractor_args": {"youtube": {"player_client": ["web"]}},
+            "js_runtimes": {"node": {}},
+            "cachedir": str(self.settings.data_dir / ".cache"),
+            "match_filter": self._reject_live,
         }
+
+    @staticmethod
+    def _reject_live(info: dict[str, Any], *, incomplete: bool = False) -> str | None:
+        if not incomplete and (info.get("is_live") or info.get("live_status") == "is_live"):
+            return "Live streams are not supported"
+        return None
 
     async def analyze(self, url: str, platform: Platform) -> MediaInfo:
         def extract() -> dict[str, Any]:
@@ -75,6 +83,8 @@ class YtDlpProvider(MediaProvider):
                 )
             )
         formats.sort(key=lambda f: (f.kind != "video", -(f.height or 0), -(f.bitrate_kbps or 0)))
+        if not formats:
+            raise RuntimeError("The source returned no downloadable formats")
         return MediaInfo(
             id=str(info.get("id") or "media"),
             title=info.get("title") or "Untitled media",
@@ -94,11 +104,21 @@ class YtDlpProvider(MediaProvider):
         is_cancelled: Callable[[], bool],
     ) -> Path:
         destination.mkdir(parents=True, exist_ok=True)
+        size_limit = self.settings.max_file_size_mb * 1024 * 1024
 
         def hook(data: dict[str, Any]) -> None:
             if is_cancelled():
                 raise CancelledByUser()
+            downloaded = data.get("downloaded_bytes") or 0
+            total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+            if max(downloaded, total) > size_limit:
+                raise RuntimeError("The download exceeds the configured size limit")
             progress(data)
+
+        def postprocess_hook(data: dict[str, Any]) -> None:
+            if is_cancelled():
+                raise CancelledByUser()
+            progress({"status": "processing", "postprocessor": data.get("postprocessor")})
 
         def run() -> Path:
             options = self._base_options()
@@ -109,7 +129,8 @@ class YtDlpProvider(MediaProvider):
                 {
                     "outtmpl": str(destination / "%(id)s.%(ext)s"),
                     "progress_hooks": [hook],
-                    "max_filesize": self.settings.max_file_size_mb * 1024 * 1024,
+                    "postprocessor_hooks": [postprocess_hook],
+                    "max_filesize": size_limit,
                     "continuedl": True,
                     "nopart": False,
                 }
@@ -125,6 +146,10 @@ class YtDlpProvider(MediaProvider):
                     options["postprocessors"] = [
                         {"key": "FFmpegExtractAudio", "preferredcodec": "m4a", "preferredquality": "0"}
                     ]
+                elif codec == "webm":
+                    options["postprocessors"] = [
+                        {"key": "FFmpegVideoConvertor", "preferedformat": "webm"}
+                    ]
             else:
                 options["format"] = f"{safe_id}+bestaudio/{safe_id}"
                 options["merge_output_format"] = "mp4"
@@ -133,7 +158,11 @@ class YtDlpProvider(MediaProvider):
             files = [p for p in destination.iterdir() if p.is_file() and not p.name.endswith(".part")]
             if not files:
                 raise RuntimeError("The source did not produce a downloadable file")
-            return max(files, key=lambda p: p.stat().st_mtime)
+            result = max(files, key=lambda p: p.stat().st_mtime)
+            if result.stat().st_size > size_limit:
+                shutil.rmtree(destination, ignore_errors=True)
+                raise RuntimeError("The resulting file exceeds the configured size limit")
+            return result
 
         return await asyncio.wait_for(
             asyncio.to_thread(run), timeout=self.settings.download_timeout_seconds

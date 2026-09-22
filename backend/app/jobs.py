@@ -8,7 +8,8 @@ from pathlib import Path
 
 from .config import Settings
 from .models import DownloadJob, DownloadRequest, JobStatus, Platform
-from .providers.ytdlp import CancelledByUser, YtDlpProvider
+from .providers.base import MediaProvider
+from .providers.ytdlp import CancelledByUser
 
 
 @dataclass
@@ -23,7 +24,7 @@ class JobRecord:
 
 
 class JobManager:
-    def __init__(self, settings: Settings, provider: YtDlpProvider):
+    def __init__(self, settings: Settings, provider: MediaProvider):
         self.settings = settings
         self.provider = provider
         self.jobs: dict[str, JobRecord] = {}
@@ -51,6 +52,14 @@ class JobManager:
         await self.queue.put(job_id)
         return public.model_copy(deep=True)
 
+    async def retry(self, job_id: str, owner: str) -> DownloadJob | None:
+        record = self.get(job_id, owner)
+        if not record:
+            return None
+        if record.public.status not in {JobStatus.failed, JobStatus.cancelled}:
+            raise ValueError("Only failed or cancelled jobs can be retried")
+        return await self.create(record.request, owner, record.platform)
+
     def get(self, job_id: str, owner: str) -> JobRecord | None:
         record = self.jobs.get(job_id)
         return record if record and secrets.compare_digest(record.owner, owner) else None
@@ -64,6 +73,12 @@ class JobManager:
             record.public.status = JobStatus.cancelled
             record.public.stage = "cancelled"
         return record.public.model_copy(deep=True)
+
+    def get_file(self, job_id: str, token: str) -> JobRecord | None:
+        record = self.jobs.get(job_id)
+        if not record or not record.public.file_token:
+            return None
+        return record if secrets.compare_digest(record.public.file_token, token) else None
 
     async def _worker(self) -> None:
         while True:
@@ -87,14 +102,31 @@ class JobManager:
                     downloaded = data.get("downloaded_bytes") or 0
                     total = data.get("total_bytes") or data.get("total_bytes_estimate")
                     progress = round(downloaded * 100 / total, 1) if total else None
+                    is_processing = data.get("status") == "processing"
 
                     def update(
                         current_record: JobRecord = current_record,
                         progress: float | None = progress,
+                        is_processing: bool = is_processing,
                     ) -> None:
-                        current_record.public.status = JobStatus.downloading
-                        current_record.public.stage = "downloading"
-                        current_record.public.progress = progress
+                        if current_record.public.status in {
+                            JobStatus.completed,
+                            JobStatus.failed,
+                            JobStatus.cancelled,
+                        }:
+                            return
+                        current_record.public.status = (
+                            JobStatus.processing if is_processing else JobStatus.downloading
+                        )
+                        current_record.public.stage = "processing" if is_processing else "downloading"
+                        current_progress = current_record.public.progress or 0
+                        if is_processing:
+                            current_record.public.progress = max(current_progress, 97)
+                        elif progress is not None:
+                            # A merged video is downloaded as multiple streams. Each stream starts
+                            # its own percentage at zero, so never let the public job move backwards
+                            # or report 100% before FFmpeg has produced the final file.
+                            current_record.public.progress = max(current_progress, min(progress, 95))
 
                     event_loop.call_soon_threadsafe(update)
 
@@ -116,10 +148,12 @@ class JobManager:
             except (CancelledByUser, asyncio.CancelledError):
                 record.public.status = JobStatus.cancelled
                 record.public.stage = "cancelled"
+                shutil.rmtree(self.settings.data_dir / job_id, ignore_errors=True)
             except Exception as exc:  # noqa: BLE001 - provider errors are normalized at the job boundary
                 record.public.status = JobStatus.failed
                 record.public.stage = "failed"
                 record.public.error = self._friendly_error(exc)
+                shutil.rmtree(self.settings.data_dir / job_id, ignore_errors=True)
             finally:
                 self.queue.task_done()
 
@@ -133,6 +167,10 @@ class JobManager:
             return "This media is protected or unavailable for download."
         if "larger than max-filesize" in lowered:
             return "The resulting file exceeds the server size limit."
+        if "size limit" in lowered:
+            return "The resulting file exceeds the server size limit."
+        if "live streams" in lowered:
+            return "Live streams are not supported. Use a completed public video instead."
         return "The source could not be processed. It may be unavailable or unsupported."
 
     async def _cleanup_loop(self) -> None:

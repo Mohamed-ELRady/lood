@@ -18,7 +18,7 @@ import {
   X,
   Zap
 } from "lucide-react";
-import { analyzeMedia, cancelJob, createDownload, getJob, saveJobFile } from "@/lib/api";
+import { analyzeMedia, cancelJob, createDownload, getJob, retryJob, saveJobFile } from "@/lib/api";
 import type { DownloadJob, MediaFormat, MediaInfo } from "@/lib/types";
 
 type Lang = "ar" | "en";
@@ -55,6 +55,7 @@ const copy = {
     cancelled: "أُلغي",
     cancel: "إلغاء",
     save: "حفظ الملف",
+    retry: "إعادة المحاولة",
     again: "رابط جديد",
     install: "تثبيت التطبيق",
     offline: "أنت دون اتصال. يمكنك فتح LOOD، لكن التحليل والتنزيل يحتاجان إلى الإنترنت.",
@@ -93,6 +94,7 @@ const copy = {
     cancelled: "Cancelled",
     cancel: "Cancel",
     save: "Save file",
+    retry: "Retry",
     again: "New link",
     install: "Install app",
     offline: "You are offline. LOOD can open, but analysis and new downloads need a connection.",
@@ -171,7 +173,10 @@ export function DownloadWorkbench() {
     document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
   }, [lang]);
 
-  const formats = useMemo(() => media?.formats.filter((item) => item.kind === mode) ?? [], [media, mode]);
+  const formats = useMemo(
+    () => media?.formats.filter((item) => mode === "video" ? item.kind === "video" : item.kind === "audio" || item.has_audio) ?? [],
+    [media, mode]
+  );
 
   useEffect(() => {
     setFormatId(formats[0]?.id ?? "");
@@ -351,7 +356,7 @@ export function DownloadWorkbench() {
                 <>
                   <div className="mt-7 grid grid-cols-2 gap-2 rounded-2xl bg-paper p-1.5">
                     <button className={`mode-button ${mode === "video" ? "active" : ""}`} onClick={() => setMode("video")} disabled={!media.formats.some((f) => f.kind === "video")}><Film size={17} />{t.video}</button>
-                    <button className={`mode-button ${mode === "audio" ? "active" : ""}`} onClick={() => setMode("audio")} disabled={!media.formats.some((f) => f.kind === "audio")}><FileAudio size={17} />{t.audio}</button>
+                    <button className={`mode-button ${mode === "audio" ? "active" : ""}`} onClick={() => setMode("audio")} disabled={!media.formats.some((f) => f.kind === "audio" || f.has_audio)}><FileAudio size={17} />{t.audio}</button>
                   </div>
 
                   <div className="mt-5 grid gap-5 sm:grid-cols-2">
@@ -390,6 +395,7 @@ export function DownloadWorkbench() {
                   t={t}
                   onCancel={async () => setJob(await cancelJob(job.id))}
                   onSave={() => saveJobFile(job)}
+                  onRetry={async () => setJob(await retryJob(job.id))}
                   onReset={reset}
                 />
               )}
@@ -412,12 +418,13 @@ function AnalysisSkeleton() {
   );
 }
 
-function JobPanel({ job, label, t, onCancel, onSave, onReset }: {
+function JobPanel({ job, label, t, onCancel, onSave, onRetry, onReset }: {
   job: DownloadJob;
   label: string;
   t: (typeof copy)[Lang];
   onCancel: () => void;
   onSave: () => void;
+  onRetry: () => void;
   onReset: () => void;
 }) {
   const active = ["preparing", "processing", "downloading"].includes(job.status);
@@ -441,9 +448,9 @@ function JobPanel({ job, label, t, onCancel, onSave, onReset }: {
       <div className="mt-5 flex gap-2">
         {active && <button onClick={onCancel} className="secondary-button flex-1"><X size={16} />{t.cancel}</button>}
         {job.status === "completed" && <button onClick={onSave} className="primary-button flex-1"><Download size={17} />{t.save}</button>}
+        {["failed", "cancelled"].includes(job.status) && <button onClick={onRetry} className="primary-button flex-1"><RotateCcw size={16} />{t.retry}</button>}
         {["completed", "failed", "cancelled"].includes(job.status) && <button onClick={onReset} className="secondary-button"><RotateCcw size={16} /><span className="hidden sm:inline">{t.again}</span></button>}
       </div>
     </div>
   );
 }
-

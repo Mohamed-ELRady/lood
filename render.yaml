@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: lood-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: LOOD_CORS_ORIGINS
+        value: https://mohamed-elrady.github.io
+      - key: LOOD_MAX_ACTIVE_JOBS
+        value: "1"
+      - key: LOOD_MAX_FILE_SIZE_MB
+        value: "256"
+      - key: LOOD_DOWNLOAD_TIMEOUT_SECONDS
+        value: "900"
+      - key: LOOD_JOB_TTL_SECONDS
+        value: "900"

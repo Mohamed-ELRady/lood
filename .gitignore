@@ -9,5 +9,6 @@ __pycache__/
 .ruff_cache/
 *.pyc
 *.egg-info/
+*.tsbuildinfo
 backend/data/
 backend/.venv/

@@ -1,3 +1,4 @@
+import shutil
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -52,8 +53,14 @@ async def http_error(_: Request, exc: HTTPException):
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, str | bool]:
+    ffmpeg_ready = shutil.which("ffmpeg") is not None
+    node_ready = shutil.which("node") is not None
+    return {
+        "status": "ok" if ffmpeg_ready and node_ready else "degraded",
+        "ffmpeg": ffmpeg_ready,
+        "javascript_runtime": node_ready,
+    }
 
 
 @app.post("/api/media/analyze")
@@ -101,16 +108,31 @@ async def cancel_download(job_id: str, client_id: str = Depends(require_client_i
     return job
 
 
+@app.post("/api/downloads/{job_id}/retry", response_model=DownloadJob, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("6/minute")
+async def retry_download(
+    request: Request,
+    job_id: str,
+    client_id: str = Depends(require_client_id),
+):
+    try:
+        job = await jobs.retry(job_id, owner_hash(client_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    if not job:
+        raise HTTPException(status_code=404, detail="Download job not found")
+    return job
+
+
 @app.get("/api/downloads/{job_id}/file")
-async def get_file(job_id: str, token: str, client_id: str = Depends(require_client_id)):
-    record = jobs.get(job_id, owner_hash(client_id))
+async def get_file(job_id: str, token: str):
+    record = jobs.get_file(job_id, token)
     if not record or not record.file_path or record.public.status != JobStatus.completed:
         raise HTTPException(status_code=404, detail="Download file not found")
-    if not record.public.file_token or token != record.public.file_token:
-        raise HTTPException(status_code=403, detail="Invalid file token")
     return FileResponse(
         record.file_path,
         filename=record.public.filename,
         media_type="application/octet-stream",
     )
-

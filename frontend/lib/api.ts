@@ -57,17 +57,15 @@ export function cancelJob(id: string) {
   return request<DownloadJob>(`/api/downloads/${id}`, { method: "DELETE" });
 }
 
-export async function saveJobFile(job: DownloadJob) {
+export function retryJob(id: string) {
+  return request<DownloadJob>(`/api/downloads/${id}/retry`, { method: "POST" });
+}
+
+export function saveJobFile(job: DownloadJob) {
   if (!job.file_token) throw new Error("Missing file token");
-  const response = await fetch(`${apiUrl()}/api/downloads/${job.id}/file?token=${encodeURIComponent(job.file_token)}`, {
-    headers: { "X-Client-ID": clientId() }
-  });
-  if (!response.ok) throw new Error("تعذر استلام الملف");
-  const blob = await response.blob();
-  const href = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.download = job.filename || "lood-download";
+  anchor.href = `${apiUrl()}/api/downloads/${job.id}/file?token=${encodeURIComponent(job.file_token)}`;
+  anchor.download = job.filename || "";
+  anchor.rel = "noopener";
   anchor.click();
-  setTimeout(() => URL.revokeObjectURL(href), 30_000);
 }

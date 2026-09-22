@@ -30,7 +30,7 @@ class MediaInfo(BaseModel):
     id: str
     title: str
     author: str | None = None
-    duration: int | None = None
+    duration: float | None = None
     thumbnail: str | None = None
     platform: Platform
     webpage_url: str
