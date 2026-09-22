@@ -1,0 +1,29 @@
+services:
+  api:
+    build: ./backend
+    environment:
+      LOOD_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      LOOD_JOB_TTL_SECONDS: 3600
+      LOOD_MAX_ACTIVE_JOBS: 2
+      LOOD_MAX_FILE_SIZE_MB: 1024
+    volumes:
+      - lood-data:/app/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  lood-data:

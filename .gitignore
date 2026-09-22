@@ -1,0 +1,12 @@
+.env
+.DS_Store
+node_modules/
+.next/
+out/
+coverage/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+backend/data/
+backend/.venv/
